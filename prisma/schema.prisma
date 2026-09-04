@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CampaignType {
+  COMPANY
+  SCHOOL
+  CUSTOM
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+enum ContactStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+  NEEDS_ATTENTION
+}
+
+// A signed-up user of the app. New accounts are unverified by
+// default (verified = false) and are manually flipped to true by
+// the app owner directly in the database (e.g. via the Neon SQL
+// console) — there is no self-serve verification endpoint. This
+// keeps a publicly-deployed instance from being used freely by
+// strangers, since sending is blocked for unverified accounts.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  verified     Boolean  @default(false)
+
+  // Each user brings their own Resend credentials, entered in the
+  // UI (not via server .env). The API key is stored encrypted
+  // (see lib/crypto.ts) and only decrypted in-memory right before
+  // the call to Resend.
+  resendApiKeyEnc  String?
+  resendFromEmail  String?
+  resendFromName   String?
+  resendReplyTo    String?
+
+  attachments Attachment[]
+  campaigns   Campaign[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Stores the CV (and, later, any other file) as base64.
+// Kept as a distinct model so it can be swapped for S3-compatible
+// storage later without touching the rest of the schema — only
+// lib/storage.ts needs to change.
+model Attachment {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  filename  String
+  mimeType  String
+  size      Int
+  data      String // base64-encoded file content
+  createdAt DateTime @default(now())
+
+  campaigns Campaign[]
+
+  @@index([userId])
+}
+
+model Campaign {
+  id                     String         @id @default(cuid())
+  userId                 String
+  user                   User           @relation(fields: [userId], references: [id])
+  name                   String
+  type                   CampaignType
+  customTemplate         String?
+  customSubject          String?
+  status                 CampaignStatus @default(DRAFT)
+
+  batchSize              Int            @default(5)
+  delayBetweenBatchesMs  Int            @default(60000)
+  maxRetries             Int            @default(3)
+  lastBatchAt            DateTime?
+
+  attachmentId           String?
+  attachment             Attachment?    @relation(fields: [attachmentId], references: [id])
+
+  contacts               CampaignContact[]
+
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  @@index([userId])
+}
+
+model CampaignContact {
+  id               String        @id @default(cuid())
+  campaignId       String
+  campaign         Campaign      @relation(fields: [campaignId], references: [id])
+
+  organizationName String
+  recipient        String?
+  email            String
+
+  subject          String
+  body             String
+
+  status           ContactStatus @default(PENDING)
+  attempts         Int           @default(0)
+  lastError        String?
+
+  scheduledAt      DateTime      @default(now())
+  sentAt           DateTime?
+
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([campaignId, status])
+  @@index([campaignId, email])
+}
